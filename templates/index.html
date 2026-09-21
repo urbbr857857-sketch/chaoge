@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>超哥影视</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: { extend: { colors: { brand: '#e50914' } } }
+        }
+    </script>
+    <style>
+        body { background: #0b0b0b; }
+        ::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        .nf-card { transition: transform .3s ease, box-shadow .3s ease; }
+        .nf-card:hover {
+            transform: scale(1.05);
+            z-index: 20;
+            box-shadow:
+                0 0 0 2px #e50914,
+                0 0 22px rgba(229, 9, 20, 0.55),
+                0 12px 30px rgba(0, 0, 0, 0.7);
+        }
+
+        .nf-badge { position: absolute; top: 6px; left: 6px; background: #e50914; color: #fff;
+            font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; z-index: 3; }
+
+        .nf-topbar { background: linear-gradient(to bottom, rgba(0,0,0,.95), rgba(0,0,0,0)); }
+        .nf-topbar.scrolled { background: #0b0b0b; box-shadow: 0 2px 10px rgba(0,0,0,.6); }
+
+        /* ⭐️ 电脑端 Hero：21/6 超宽幅 */
+        .nf-hero { position: relative; aspect-ratio: 21 / 6; overflow: hidden; border-radius: 12px; }
+        .nf-hero::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(to top, #0b0b0b 0%, rgba(11,11,11,.5) 55%, rgba(11,11,11,0) 100%);
+            z-index: 2;
+        }
+        .nf-hero-content { position: absolute; left: 24px; right: 24px; bottom: 18px; z-index: 3; }
+
+        /* 手机端 Hero：21/9 */
+        .nf-hero-mobile { position: relative; aspect-ratio: 21 / 9; overflow: hidden; border-radius: 12px; }
+        .nf-hero-mobile img { width: 100%; height: 100%; object-fit: cover; }
+        .nf-hero-mobile::after {
+            content: ''; position: absolute; inset: 0;
+            background: linear-gradient(to top, #0b0b0b 0%, rgba(11,11,11,.5) 55%, rgba(11,11,11,0) 100%);
+            z-index: 1;
+        }
+
+      
+        .nf-hero-blur-bg {
+            position: absolute; inset: 0;
+            background-size: cover; background-position: center;
+            filter: blur(1px) saturate(1.5) brightness(0.7);
+            transform: scale(1.15);
+            z-index: 0;
+        }
+        .nf-hero-overlay {
+            position: absolute; inset: 0;
+            background: linear-gradient(to right, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.4) 40%, rgba(0,0,0,0.1) 70%),
+                        linear-gradient(to top, rgba(11,11,11,0.95) 0%, rgba(11,11,11,0) 60%);
+            z-index: 2;
+        }
+
+        .hero-desktop { display: none; }
+        @media (min-width: 900px) {
+            .hero-mobile { display: none; }
+            .hero-desktop { display: block; }
+        }
+
+        .pagination { display: none; }
+        @media (min-width: 900px) {
+            .pagination { display: flex; }
+            .video-grid {
+                display: grid !important;
+                grid-template-columns: repeat(5, 1fr) !important;
+                gap: 12px !important;
+            }
+        }
+        @media (max-width: 899px) {
+            .video-grid {
+                display: grid !important;
+                grid-template-columns: repeat(3, 1fr) !important;
+                gap: 8px !important;
+            }
+        }
+
+        .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+
+        /* ⭐️ 沉浸式标题 */
+        .nf-card .cover-wrap { position: relative; width: 100%; aspect-ratio: 2/3; background: #000; overflow: hidden; }
+        .nf-card .cover-wrap img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease; }
+        .nf-card:hover .cover-wrap img { transform: scale(1.08); }
+        .nf-card .cover-wrap::after {
+            content: '';
+            position: absolute; inset: auto 0 0 0; height: 70%;
+            background: linear-gradient(to top, rgba(0,0,0,.95) 0%, rgba(0,0,0,.55) 45%, rgba(0,0,0,0) 100%);
+            pointer-events: none; z-index: 1;
+        }
+        .nf-card .title-immersive {
+            position: absolute; left: 0; right: 0; bottom: 0;
+            padding: 8px 10px; z-index: 2;
+        }
+        .nf-card .title-immersive .t-name {
+            font-size: 12.5px; font-weight: 700; line-height: 1.3; color: #fff;
+            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+            text-shadow: 0 2px 6px rgba(0,0,0,.9);
+        }
+        .nf-card .title-immersive .t-meta {
+            font-size: 10px; color: rgba(255,255,255,.7); margin-top: 3px;
+            display: flex; justify-content: space-between;
+        }
+    </style>
+</head>
+<body class="text-white min-h-screen">
+
+    <!-- 顶部栏 -->
+    <div id="topbar" class="nf-topbar fixed top-0 left-0 right-0 z-50 px-4 py-3 flex items-center justify-between transition-all">
+        <div class="flex items-center gap-3">
+            <a href="/?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+               class="text-brand font-black text-2xl tracking-tighter">超哥影视</a>
+            {% if is_admin_view %}
+            <select id="sourceSelect" class="bg-black/60 border border-white/20 text-xs rounded px-2 py-1 outline-none text-white">
+                {% for key, val in api_sources.items() %}
+                <option value="{{ key }}" {{ 'selected' if key == current_source else '' }}>{{ val.name }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
+        </div>
+        <form action="/" method="GET" class="flex items-center">
+            <input type="hidden" name="source" value="{{ current_source }}">
+            {% if is_admin_view %}<input type="hidden" name="key" value="{{ admin_key }}">{% endif %}
+            <input type="text" name="wd" value="{{ current_wd or '' }}" placeholder="搜索"
+                   class="w-28 sm:w-48 bg-black/60 border border-white/20 rounded-full px-3 py-1.5 text-xs outline-none focus:border-brand placeholder-white/50">
+            <button class="ml-2 text-white/80 hover:text-white text-lg">🔍</button>
+        </form>
+    </div>
+
+  <div class="pt-16 pb-20 max-w-[1400px] mx-auto">
+
+        {% if current_wd %}
+            <div class="px-4 mb-5 text-sm text-white/70">
+                搜索「<span class="text-brand font-bold">{{ current_wd }}</span>」共 {{ videos|length }} 条
+                <a href="/?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}" class="text-brand ml-2">清空</a>
+            </div>
+        {% else %}
+            <!-- ⭐️ 首屏 Hero：随机取一个 -->
+            {% if videos and videos|length >= 1 %}
+            {% set hero = videos|random %}
+            <div class="px-4 mb-6">
+
+                <!-- 手机端：清晰大图 -->
+                <div class="hero-mobile nf-hero-mobile">
+                    {% if hero.vod_pic %}
+                    <img src="{{ hero.vod_pic }}" alt="{{ hero.vod_name }}">
+                    {% else %}
+                    <div class="w-full h-full bg-gradient-to-br from-slate-900 to-black"></div>
+                    {% endif %}
+                    <div class="nf-hero-content">
+                        <h2 class="text-lg font-black tracking-tight mb-1">{{ hero.vod_name }}</h2>
+                        <p class="text-[11px] text-white/70 mb-2">{{ hero.type_name or '' }} · {{ hero.vod_remarks or '' }}</p>
+                        <a href="/play/{{ hero.vod_id }}?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                           class="inline-block bg-white text-black font-bold px-4 py-1.5 rounded text-xs">▶ 播放</a>
+                    </div>
+                </div>
+
+                <!-- 电脑端：模糊大图背景 + 文字叠加 -->
+                <div class="hero-desktop nf-hero">
+                    {% if hero.vod_pic %}
+                    <div class="nf-hero-blur-bg" style="background-image: url('{{ hero.vod_pic }}');"></div>
+                    {% else %}
+                    <div class="nf-hero-blur-bg" style="background: #111;"></div>
+                    {% endif %}
+                    <div class="nf-hero-overlay"></div>
+                    <div class="nf-hero-content">
+                        <h2 class="text-3xl font-black tracking-tight mb-2 drop-shadow-lg">{{ hero.vod_name }}</h2>
+                        <p class="text-sm text-white/75 mb-3">{{ hero.type_name or '' }} · {{ hero.vod_remarks or '' }}</p>
+                        <div class="flex gap-2">
+                            <a href="/play/{{ hero.vod_id }}?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                               class="bg-white text-black font-bold px-6 py-2 rounded text-sm hover:bg-white/85 transition">▶ 播放</a>
+                            <a href="/play/{{ hero.vod_id }}?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                               class="bg-white/20 backdrop-blur text-white font-bold px-6 py-2 rounded text-sm hover:bg-white/30 transition">ℹ 详情</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        {% endif %}
+
+        <!-- 分类导航 -->
+        {% if not current_wd %}
+        <div class="px-4 mb-3 flex gap-2 overflow-x-auto no-scrollbar">
+            <a href="/?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+               class="px-4 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition
+                      {{ 'bg-white text-black' if not parent_id else 'bg-white/10 text-white/80 hover:bg-white/20' }}">最新</a>
+            {% for cat in primary_categories %}
+                {% set subs = secondary_map.get(cat.id|string, []) %}
+                {% set is_active = parent_id == cat.id|string %}
+                {% if subs %}
+                <a href="/?type_id={{ subs[0].id }}&source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                   class="px-4 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition
+                          {{ 'bg-white text-black' if is_active else 'bg-white/10 text-white/80 hover:bg-white/20' }}">{{ cat.name }}</a>
+                {% else %}
+                <a href="/?type_id={{ cat.id }}&source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                   class="px-4 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition
+                          {{ 'bg-white text-black' if is_active else 'bg-white/10 text-white/80 hover:bg-white/20' }}">{{ cat.name }}</a>
+                {% endif %}
+            {% endfor %}
+        </div>
+
+        {% if secondary_categories %}
+        <div class="px-4 mb-5 flex gap-2 overflow-x-auto no-scrollbar">
+            {% for cat in secondary_categories %}
+            <a href="/?type_id={{ cat.id }}&source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+               class="px-3 py-1 rounded-full text-[11px] flex-shrink-0 transition
+                      {{ 'bg-brand text-white' if current_type == cat.id|string else 'bg-white/5 text-white/60 hover:bg-white/10' }}">{{ cat.name }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        <!-- 视频网格 -->
+        {% if videos|length > 0 %}
+        <div class="px-4 mb-8">
+            <h3 class="mb-3 text-base font-bold tracking-tight">
+                {% if current_wd %}搜索结果{% elif current_type %}影片{% else %}最新更新{% endif %}
+            </h3>
+
+            <div class="video-grid">
+                {% for v in videos %}
+                <a href="/play/{{ v.vod_id }}?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}"
+                   class="nf-card block rounded-lg overflow-hidden bg-[#1a1a1a] relative">
+                    <div class="cover-wrap">
+                        {% if v.vod_pic %}
+                        <img src="{{ v.vod_pic }}" alt="{{ v.vod_name }}" loading="lazy"
+                             onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\'w-full h-full flex items-center justify-center text-white/30 text-3xl\'>🎬</div>';">
+                        {% else %}
+                        <div class="w-full h-full flex items-center justify-center text-white/30 text-3xl">🎬</div>
+                        {% endif %}
+
+                        {% if v.vod_remarks %}
+                        <span class="nf-badge">{{ v.vod_remarks }}</span>
+                        {% endif %}
+
+                        <div class="title-immersive">
+                            <div class="t-name">{{ v.vod_name }}</div>
+                            <div class="t-meta">
+                                <span>{{ v.type_name or '' }}</span>
+                                <span>{{ v.vod_score or '' }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% else %}
+        <div class="px-4 py-20 text-center text-white/50">
+            <div class="text-5xl mb-4">😢</div>
+            <p class="text-sm">没有找到相关内容</p>
+            <a href="/?source={{ current_source }}{% if is_admin_view %}&key={{ admin_key }}{% endif %}" class="inline-block mt-4 bg-brand text-white font-bold px-5 py-2 rounded text-sm">返回首页</a>
+        </div>
+        {% endif %}
+
+        <!-- 分页 -->
+        {% if videos|length > 0 and pagecount > 1 %}
+        <div class="pagination px-4 justify-center items-center flex-wrap gap-2 pb-10">
+            {% set base_params = '&source=' + current_source + (('&key=' + admin_key) if is_admin_view else '') %}
+            {% if current_type %}{% set base_params = base_params + '&type_id=' + current_type %}{% endif %}
+            {% if current_wd %}{% set base_params = base_params + '&wd=' + current_wd %}{% endif %}
+
+            {% if current_page > 1 %}
+            <a href="/?page=1{{ base_params }}" class="px-3 py-1.5 rounded bg-white/5 text-xs hover:bg-white/10">首页</a>
+            <a href="/?page={{ current_page - 1 }}{{ base_params }}" class="px-3 py-1.5 rounded bg-white/5 text-xs hover:bg-white/10">上一页</a>
+            {% else %}
+            <span class="px-3 py-1.5 rounded bg-white/5 text-xs opacity-30">首页</span>
+            <span class="px-3 py-1.5 rounded bg-white/5 text-xs opacity-30">上一页</span>
+            {% endif %}
+
+            {% for p in page_range %}
+            <a href="/?page={{ p }}{{ base_params }}"
+               class="px-3 py-1.5 rounded text-xs {{ 'bg-white text-black font-bold' if p == current_page else 'bg-white/5 hover:bg-white/10' }}">{{ p }}</a>
+            {% endfor %}
+
+            {% if current_page < pagecount %}
+            <a href="/?page={{ current_page + 1 }}{{ base_params }}" class="px-3 py-1.5 rounded bg-white/5 text-xs hover:bg-white/10">下一页</a>
+            <a href="/?page={{ pagecount }}{{ base_params }}" class="px-3 py-1.5 rounded bg-white/5 text-xs hover:bg-white/10">尾页</a>
+            {% else %}
+            <span class="px-3 py-1.5 rounded bg-white/5 text-xs opacity-30">下一页</span>
+            <span class="px-3 py-1.5 rounded bg-white/5 text-xs opacity-30">尾页</span>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        const topbar = document.getElementById('topbar');
+        window.addEventListener('scroll', () => {
+            if (window.scrollY > 40) topbar.classList.add('scrolled');
+            else topbar.classList.remove('scrolled');
+        });
+
+        (function() {
+            if (window.innerWidth >= 900) return;
+            if (window.location.search.includes('wd=')) return;
+
+            let currentPage = {{ current_page }};
+            const totalPages = {{ pagecount }};
+            let loading = false;
+
+            const sentinel = document.createElement('div');
+            sentinel.id = 'scroll-sentinel';
+            sentinel.style.height = '60px';
+            sentinel.style.textAlign = 'center';
+            sentinel.style.color = '#666';
+            sentinel.style.padding = '20px 0';
+            document.body.appendChild(sentinel);
+
+            async function loadMore() {
+                if (loading || currentPage >= totalPages) return;
+                loading = true;
+                sentinel.textContent = '加载中...';
+
+                const url = new URL(window.location.href);
+                url.searchParams.set('page', currentPage + 1);
+
+                try {
+                    const res = await fetch(url.toString());
+                    const html = await res.text();
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    const newGrid = doc.querySelector('.video-grid');
+
+                    if (newGrid) {
+                        const cards = Array.from(newGrid.children).filter(c => c.classList.contains('nf-card'));
+                        if (cards.length === 0) {
+                            sentinel.textContent = '没有更多了';
+                            loading = true;
+                            return;
+                        }
+                        const grid = document.querySelector('.video-grid');
+                        cards.forEach(card => grid.appendChild(card));
+                        currentPage++;
+                        sentinel.textContent = '';
+                        window.history.replaceState({}, '', url.toString());
+                    } else {
+                        sentinel.textContent = '没有更多了';
+                    }
+                } catch (e) {
+                    console.error(e);
+                    sentinel.textContent = '加载失败';
+                }
+                loading = false;
+            }
+
+            const observer = new IntersectionObserver(entries => {
+                if (entries[0].isIntersecting) loadMore();
+            }, { rootMargin: '300px' });
+            observer.observe(sentinel);
+        })();
+
+        {% if is_admin_view %}
+        const sourceSelect = document.getElementById('sourceSelect');
+        if (sourceSelect) {
+            sourceSelect.addEventListener('change', async function () {
+                const res = await fetch('/admin/switch_source?key={{ admin_key }}&source=' + this.value);
+                const data = await res.json();
+                if (data.ok) {
+                    location.href = '/?key={{ admin_key }}';
+                } else {
+                    alert('切换失败');
+                }
+            });
+        }
+        {% endif %}
+    </script>
+</body>
+</html>
