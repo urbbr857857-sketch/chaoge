@@ -6,11 +6,13 @@ import gzip
 import string
 import hashlib
 import time
+import sqlite3
 import requests
 import libsql_client
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
-from flask import Flask, jsonify, send_from_directory, request, session, redirect, make_response, render_template, Response
+from concurrent.futures import ThreadPoolExecutor
+from flask import Flask, jsonify, send_from_directory, request, session, redirect, make_response, render_template, Response, url_for
 from flask_compress import Compress
 
 # ============================================================
@@ -28,6 +30,10 @@ TURSO_TOKEN = os.environ.get("TURSO_AUTH_TOKEN", "eyJhbGciOiJFZERTQSIsInR5cCI6Ik
 
 PUBLIC_DOMAIN = 'https://chaoge.onrender.com'
 ADMIN_ACCESS_KEY = 'MyAdmin_2024_Xk9pQ3'
+QQ_GROUP_URL = 'https://qun.qq.com/universal-share/share?ac=1&authKey=NoPRNDnAKthjxReAbRW%2FmXJRuifzVUiYJvyBZd7X0CkT1p%2F6XGxCtDRPokzlpP%2Fi&busi_data=eyJncm91cENvZGUiOiIxMzU5NDA4NTMiLCJ0b2tlbiI6IlJRVzNoOXdhZEYraHp2d3JnMVlOK2xDRVFyeStMWDNwSzRlbkJLVTZwZjg5d25zMGpFVzl1MWdsbTJqOUJmNXciLCJ1aW4iOiIxMzU3NjY0NzI0In0%3D&data=oN17F6DcQd5jsQPJo48b50CiB0zQbQBo3lEOmOeVHnY_UdKgxX7L2wErwiwHe3iAQet3fuuYxEEGLHoy3Qf4qg&svctype=4&tempid=h5_group_info'
+LOCAL_DB_PATH = os.path.join(BASE_DIR, 'local_users.db')
+BRAND_NAME = '超哥影视'
+app.permanent_session_lifetime = timedelta(days=30)
 
 # ============================================================
 #  多接口源
@@ -67,6 +73,161 @@ def get_db():
 
 def hash_password(password: str) -> str:
     return hashlib.sha256((password + 'ledger-salt-v1').encode('utf-8')).hexdigest()
+
+def get_local_db():
+    conn = sqlite3.connect(LOCAL_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_local_db():
+    conn = get_local_db()
+    conn.execute('''CREATE TABLE IF NOT EXISTS web_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        created_at TEXT
+    )''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS web_history (
+        user_id INTEGER NOT NULL,
+        vod_id TEXT NOT NULL,
+        vod_name TEXT,
+        vod_pic TEXT,
+        type_name TEXT,
+        remarks TEXT,
+        updated_at TEXT,
+        PRIMARY KEY (user_id, vod_id)
+    )''')
+    conn.commit()
+    conn.close()
+
+def init_cloud_tables():
+    try:
+        with get_db() as client:
+            client.execute('''CREATE TABLE IF NOT EXISTS web_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT)''')
+            client.execute('''CREATE TABLE IF NOT EXISTS web_history (
+                user_id INTEGER NOT NULL,
+                vod_id TEXT NOT NULL,
+                vod_name TEXT,
+                vod_pic TEXT,
+                type_name TEXT,
+                remarks TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (user_id, vod_id))''')
+        print("✅ 云端账号/播放记录表就绪")
+    except Exception as e:
+        print(f"⚠️ 云表初始化失败（账号/历史将回落本地存储）: {e}")
+
+init_local_db()
+init_cloud_tables()
+
+def _find_user(username):
+    try:
+        with get_db() as client:
+            res = client.execute("SELECT id, username, password_hash FROM web_users WHERE username=?", (username,))
+            if res.rows:
+                return {'id': res.rows[0][0], 'username': res.rows[0][1],
+                        'password_hash': res.rows[0][2], 'src': 'cloud'}
+    except Exception as e:
+        print(f"云库查询用户失败，回落本地: {e}")
+    conn = get_local_db()
+    row = conn.execute('SELECT id, username, password_hash FROM web_users WHERE username=?', (username,)).fetchone()
+    conn.close()
+    if row:
+        return {'id': row['id'], 'username': row['username'],
+                'password_hash': row['password_hash'], 'src': 'local'}
+    return None
+
+def create_web_user(username, pw_hash):
+    try:
+        with get_db() as client:
+            client.execute("INSERT INTO web_users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                           (username, pw_hash, datetime.now().isoformat()))
+        return
+    except Exception as e:
+        print(f"云库写用户失败，回落本地: {e}")
+    conn = get_local_db()
+    conn.execute("INSERT INTO web_users (username, password_hash, created_at) VALUES (?, ?, ?)",
+                 (username, pw_hash, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def current_web_user():
+    username = session.get('web_username')
+    if not username:
+        return None
+    row = _find_user(username)
+    return {'id': row['id'], 'username': row['username']} if row else None
+
+def save_web_history(user_id, item):
+    now = datetime.now().isoformat()
+    try:
+        with get_db() as client:
+            client.execute('''INSERT INTO web_history (user_id, vod_id, vod_name, vod_pic, type_name, remarks, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (user_id, vod_id) DO UPDATE SET
+                    vod_name=excluded.vod_name, vod_pic=excluded.vod_pic,
+                    remarks=excluded.remarks, updated_at=excluded.updated_at''',
+                           (user_id, item['vod_id'], item['vod_name'], item['vod_pic'],
+                            item['type_name'], item['remarks'], now))
+        return
+    except Exception as e:
+        print(f"云库写历史失败，回落本地: {e}")
+    conn = get_local_db()
+    conn.execute('''INSERT OR REPLACE INTO web_history
+        (user_id, vod_id, vod_name, vod_pic, type_name, remarks, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                  (user_id, item['vod_id'], item['vod_name'], item['vod_pic'],
+                   item['type_name'], item['remarks'], now))
+    conn.commit()
+    conn.close()
+
+def list_web_history(user_id, limit=100):
+    try:
+        with get_db() as client:
+            res = client.execute(
+                "SELECT vod_id, vod_name, vod_pic, updated_at FROM web_history WHERE user_id=? ORDER BY updated_at DESC LIMIT ?",
+                (user_id, limit))
+            return [{'id': r[0], 'name': r[1], 'pic': r[2], 'ts': r[3]} for r in res.rows]
+    except Exception as e:
+        print(f"云库读历史失败，回落本地: {e}")
+    conn = get_local_db()
+    rows = conn.execute(
+        "SELECT vod_id, vod_name, vod_pic, updated_at FROM web_history WHERE user_id=? ORDER BY updated_at DESC LIMIT ?",
+        (user_id, limit)).fetchall()
+    conn.close()
+    return [{'id': r['vod_id'], 'name': r['vod_name'], 'pic': r['vod_pic'], 'ts': r['updated_at']} for r in rows]
+
+def clear_web_history(user_id):
+    try:
+        with get_db() as client:
+            client.execute("DELETE FROM web_history WHERE user_id=?", (user_id,))
+        return
+    except Exception as e:
+        print(f"云库清历史失败，回落本地: {e}")
+    conn = get_local_db()
+    conn.execute("DELETE FROM web_history WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+@app.context_processor
+def inject_globals():
+    return {
+        'brand_name': BRAND_NAME,
+        'qq_group_url': QQ_GROUP_URL,
+        'web_user': current_web_user(),
+    }
+
+NAV_CATEGORIES = [
+    {'id': '', 'name': '首页', 'path': '/'},
+    {'id': '1', 'name': '电影', 'path': '/?type_id=1'},
+    {'id': '2', 'name': '电视剧', 'path': '/?type_id=2'},
+    {'id': '3', 'name': '综艺', 'path': '/?type_id=3'},
+    {'id': '4', 'name': '动漫', 'path': '/?type_id=4'},
+]
 def clean_html(raw_html):
     if not raw_html:
         return ''
@@ -114,16 +275,52 @@ def parse_categories(class_list):
     return primary, secondary_map, sub_to_parent
 
 # ============================================================
-#  API 请求 & 封面补全
+#  API 请求 & 封面补全（带进程级缓存，避免每个访客都打上游）
 # ============================================================
+API_CACHE = {}
+API_CACHE_TTL = 1800
+API_CACHE_LOCK = __import__('threading').Lock()
+
+SUB_CATEGORY_LOCK = __import__('threading').Lock()
+SUB_CATEGORY_CACHE = {}
+
+def get_sub_type_ids(api_base, type_id):
+    # 360zy 类源：父分类直接查询返回 0，需要展开子分类合并查询
+    with SUB_CATEGORY_LOCK:
+        if api_base in SUB_CATEGORY_CACHE:
+            child_map = SUB_CATEGORY_CACHE[api_base]
+        else:
+            child_map = {}
+            try:
+                cats = api_get({'ac': 'class'}, api_base).get('class', []) or []
+                for c in cats:
+                    pid = str(c.get('type_pid', 0))
+                    if pid != '0':
+                        child_map.setdefault(pid, []).append(str(c['type_id']))
+            except Exception:
+                pass
+            SUB_CATEGORY_CACHE[api_base] = child_map
+    return child_map.get(str(type_id), [])
+
 def api_get(params, api_base):
+    key = (api_base, tuple(sorted(params.items())))
+    now = time.time()
+    with API_CACHE_LOCK:
+        hit = API_CACHE.get(key)
+        if hit and now - hit[0] < API_CACHE_TTL:
+            return hit[1]
     try:
-        resp = requests.get(api_base, params=params, timeout=10)
+        resp = requests.get(api_base, params=params, timeout=8)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
     except Exception as e:
         print(f"API请求失败: {e}")
+        if hit:
+            return hit[1]
         return {"code": 0, "list": [], "pagecount": 1, "class": []}
+    with API_CACHE_LOCK:
+        API_CACHE[key] = (now, data)
+    return data
 
 def fill_covers(videos, api_base):
     ids_to_fetch = [str(v['vod_id']) for v in videos if not v.get('vod_pic')]
@@ -160,6 +357,59 @@ def set_current_source(source_key):
         client.execute("UPDATE app_settings SET value=? WHERE key='current_source'", (source_key,))
     return True
 
+def fetch_list(api_base, type_id='', page=1, wd=''):
+    params = {'ac': 'list', 'pg': page}
+    if type_id:
+        sub_ids = get_sub_type_ids(api_base, type_id)
+        params['t'] = ','.join(sub_ids) if sub_ids else type_id
+    if wd:
+        params['wd'] = wd
+    data = api_get(params, api_base)
+    videos = fill_covers(data.get('list', []) or [], api_base)
+    return {
+        'videos': videos,
+        'pagecount': data.get('pagecount', 1) or 1,
+        'class': data.get('class', []) or [],
+    }
+
+def match_nav_type(primary_categories):
+    mapping = {}
+    keywords = {
+        '1': ['电影', '影片'],
+        '2': ['电视', '连续剧', '剧集'],
+        '3': ['综艺'],
+        '4': ['动漫', '动画'],
+        '5': ['短剧'],
+    }
+    for cat in primary_categories:
+        name = cat.get('name', '')
+        for key, words in keywords.items():
+            if any(w in name for w in words) and key not in mapping:
+                mapping[key] = str(cat['id'])
+    return mapping
+
+# ============================================================
+#  启动时预热首页缓存，避免第一个访客等上游接口
+# ============================================================
+def _warm_cache():
+    try:
+        base = API_SOURCES.get(DEFAULT_SOURCE, {}).get('base')
+        if base:
+            first = fetch_list(base, '', 1, '')
+            cats, _, _ = parse_categories(first['class'])
+            nav_map = match_nav_type(cats)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                futs = [pool.submit(fetch_list, base, tid, 1, '') for tid in nav_map.values() if tid]
+                for f in futs:
+                    try: f.result()
+                    except Exception: pass
+        print("🔥 首页缓存预热完成")
+    except Exception as e:
+        print(f"预热失败(不影响启动): {e}")
+
+import threading as _threading
+_threading.Thread(target=_warm_cache, daemon=True).start()
+
 # ============================================================
 #  网页版：首页
 # ============================================================
@@ -168,25 +418,20 @@ def web_index():
     source_key = get_current_source()
     api_base = API_SOURCES[source_key]['base']
     is_admin_view = (request.args.get('key', '') == ADMIN_ACCESS_KEY)
-    
+
     page = request.args.get('page', 1, type=int)
     type_id = request.args.get('type_id', '', type=str)
     wd = request.args.get('wd', '', type=str)
-    
-    params = {'ac': 'list', 'pg': page}
-    if type_id: params['t'] = type_id
-    if wd: params['wd'] = wd
-    
-    data = api_get(params, api_base)
-    videos = data.get('list', [])
-    pagecount = data.get('pagecount', 1)
-    
-    primary_categories, secondary_map, sub_to_parent = parse_categories(data.get('class', []))
-    
+
+    first = fetch_list(api_base, type_id=type_id, page=page, wd=wd)
+    videos = first['videos']
+    pagecount = first['pagecount']
+    primary_categories, secondary_map, sub_to_parent = parse_categories(first['class'])
+
     if not primary_categories:
         fallback = api_get({'ac': 'detail', 'pg': 1}, api_base)
         primary_categories, secondary_map, sub_to_parent = parse_categories(fallback.get('class', []))
-    
+
     current_primary_id = ''
     if type_id:
         for cat in primary_categories:
@@ -195,13 +440,58 @@ def web_index():
                 break
         if not current_primary_id:
             current_primary_id = sub_to_parent.get(str(type_id), '')
-    
-    videos = fill_covers(videos, api_base)
+
     current_secondary_list = secondary_map.get(current_primary_id, []) if current_primary_id else []
     page_range = list(range(max(1, page - 2), min(pagecount, page + 2) + 1))
-    
+
+    nav_map = match_nav_type(primary_categories)
+    nav_items = [
+        {'id': '', 'name': '首页', 'path': '/'},
+        {'id': nav_map.get('1', '1'), 'name': '电影', 'path': '/?type_id=' + nav_map.get('1', '1')},
+        {'id': nav_map.get('2', '2'), 'name': '电视剧', 'path': '/?type_id=' + nav_map.get('2', '2')},
+        {'id': nav_map.get('3', '3'), 'name': '综艺', 'path': '/?type_id=' + nav_map.get('3', '3')},
+        {'id': nav_map.get('4', '4'), 'name': '动漫', 'path': '/?type_id=' + nav_map.get('4', '4')},
+    ]
+    if '5' in nav_map:
+        nav_items.append({'id': nav_map['5'], 'name': '短剧', 'path': '/?type_id=' + nav_map['5']})
+
+    sections = []
+    ranks = []
+    is_home = (not type_id and not wd)
+    if is_home:
+        section_defs = [
+            ('movie', '最新电影', nav_map.get('1')),
+            ('tv', '最新电视剧', nav_map.get('2')),
+            ('show', '最新综艺', nav_map.get('3')),
+            ('anime', '最新动漫', nav_map.get('4')),
+        ]
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            futures = []
+            for key, title, tid in section_defs:
+                if not tid:
+                    continue
+                futures.append((key, title, tid, pool.submit(fetch_list, api_base, tid, 1, '')))
+            for key, title, tid, fut in futures:
+                try:
+                    items = fut.result().get('videos', [])[:12]
+                except Exception:
+                    items = []
+                if items:
+                    sections.append({'key': key, 'title': title, 'type_id': tid, 'videos': items})
+                    ranks.append({'title': title.replace('最新', '') + '热榜', 'videos': items[:10]})
+        if not sections and videos:
+            sections.append({'key': 'latest', 'title': '最新更新', 'type_id': '', 'videos': videos[:12]})
+            ranks.append({'title': '热播榜', 'videos': videos[:10]})
+
+    banners = videos[:8] if videos else []
+
     return render_template('index.html',
                            videos=videos,
+                           banners=banners,
+                           sections=sections,
+                           ranks=ranks,
+                           nav_items=nav_items,
+                           is_home=is_home,
                            primary_categories=primary_categories,
                            secondary_categories=current_secondary_list,
                            secondary_map=secondary_map,
@@ -219,8 +509,6 @@ def web_index():
 # ============================================================
 #  网页版：播放页
 # ============================================================
-@app.route('/play/<int:vod_id>')
-@app.route('/play/<int:vod_id>')
 @app.route('/play/<int:vod_id>')
 def web_play(vod_id):
     source_key = get_current_source()
@@ -286,7 +574,95 @@ def web_play(vod_id):
                            play_from=play_from, default_url=default_url,
                            current_source=source_key,
                            is_admin_view=is_admin_view,
-                           admin_key=ADMIN_ACCESS_KEY)
+                           admin_key=ADMIN_ACCESS_KEY,
+                           nav_items=NAV_CATEGORIES)
+
+# ============================================================
+#  网页版：本地登录 / 注册（不写入云数据库）
+# ============================================================
+@app.route('/login', methods=['GET', 'POST'])
+def web_login():
+    error = ''
+    next_url = request.args.get('next') or request.form.get('next') or '/'
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+        if not username or not password:
+            error = '请输入用户名和密码'
+        else:
+            row = _find_user(username)
+            if not row or row['password_hash'] != hash_password(password):
+                error = '用户名或密码错误'
+            else:
+                session.permanent = True
+                session['web_user_id'] = row['id']
+                session['web_username'] = row['username']
+                return redirect(next_url)
+    return render_template('login.html', mode='login', error=error, next_url=next_url)
+
+@app.route('/register', methods=['GET', 'POST'])
+def web_register():
+    error = ''
+    next_url = request.args.get('next') or request.form.get('next') or '/'
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+        password2 = request.form.get('password2') or ''
+        if len(username) < 3 or len(username) > 20:
+            error = '用户名需 3-20 个字符'
+        elif not re.match(r'^[\w\u4e00-\u9fa5]+$', username):
+            error = '用户名只能包含中文、字母、数字和下划线'
+        elif len(password) < 6:
+            error = '密码至少 6 位'
+        elif password != password2:
+            error = '两次输入的密码不一致'
+        else:
+            if _find_user(username):
+                error = '用户名已被占用'
+            else:
+                create_web_user(username, hash_password(password))
+                row = _find_user(username)
+                session.permanent = True
+                session['web_user_id'] = row['id']
+                session['web_username'] = row['username']
+                return redirect(next_url)
+    return render_template('login.html', mode='register', error=error, next_url=next_url)
+
+@app.route('/logout')
+def web_logout():
+    session.pop('web_user_id', None)
+    session.pop('web_username', None)
+    return redirect('/')
+
+@app.route('/history')
+def web_history():
+    return render_template('history.html')
+
+@app.route('/api/history', methods=['GET', 'POST', 'DELETE'])
+def api_history():
+    user = current_web_user()
+    if request.method == 'POST':
+        if not user:
+            return jsonify({"error": "未登录"}), 401
+        d = request.get_json(silent=True) or {}
+        if not d.get('vod_id'):
+            return jsonify({"error": "缺少 vod_id"}), 400
+        save_web_history(user['id'], {
+            'vod_id': str(d['vod_id']),
+            'vod_name': d.get('vod_name', ''),
+            'vod_pic': d.get('vod_pic', ''),
+            'type_name': d.get('type_name', ''),
+            'remarks': d.get('remarks', ''),
+        })
+        return jsonify({"ok": True})
+    if request.method == 'DELETE':
+        if not user:
+            return jsonify({"error": "未登录"}), 401
+        clear_web_history(user['id'])
+        return jsonify({"ok": True})
+    if not user:
+        return jsonify({"items": [], "guest": True})
+    return jsonify({"items": list_web_history(user['id']), "guest": False})
 
 # ============================================================
 #  接口版：TK 鉴权 + 防分享
